@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Serial Test</title>
+    
+    
+</head>
+
+<body>
+    <!-- 按钮及文本框 -->
+    <button id="btnSelect">select</button><br>
+    <label for="iptBaudRate">Baud Rate:</label>
+    <input type="text" id="iptBaudRate" value="115200"><br>
+    <button id="btnOpen">open</button><br>
+    <button id="btnClose">close</button><br>
+    <button id="btnSend">send</button><br>
+    <textarea id="iptOutput">D0 D1 D2 D3 D4 D5 D6 D7</textarea><br>
+    <textarea id="iptInput" readonly></textarea>
+
+</body>
+<style>
+    * {
+        margin: 0;
+        padding: 0;
+    }
+
+    button,textarea {
+        margin: 1rem;
+        margin-bottom: 0;
+        padding: 0.5rem;
+        width: 20rem;
+    }
+
+    textarea {
+        height: 5rem;
+    }
+</style>
+<script>
+    // 检测浏览器是否支持 Web Serial API
+    if ("serial" in navigator) {
+    } else {
+        alert("浏览器不支持 Web Serial API.");
+    }
+
+    // 全局串口设备插入事件
+    navigator.serial.onconnect = (event) => {
+        console.log("Serial port connected: ", event.target);
+    };
+
+    // 全局串口设备拔出事件
+    navigator.serial.ondisconnect = (event) => {
+        console.log("Serial port disconnected: ", event.target);
+    };
+</script>
+<script>
+    // 交互元素
+    const btnSelect = document.querySelector("#btnSelect");
+    const btnOpen = document.querySelector("#btnOpen");
+    const btnClose = document.querySelector("#btnClose");
+    const btnSend = document.querySelector("#btnSend");
+    const iptOutput = document.querySelector("#iptOutput");
+    const iptInput = document.querySelector("#iptInput");
+    const iptBaudRate = document.querySelector("#iptBaudRate");
+
+    let port = null;
+    let reader = null;
+    let reading = false;
+
+    // 选择串口
+    btnSelect.onclick = async () => {
+        try {
+            port = await navigator.serial.requestPort(); // 弹出系统串口列表对话框，选择一个串口进行连接
+            let ports = await navigator.serial.getPorts(); // 获取已连接的授权过的设备列表
+            console.log(ports);
+            // await port.forget(); // 取消授权
+            // console.log(port.getInfo()); // 打印PID&VID (对于蓝牙串口好像是显示服务号)
+        } catch (e) {
+            console.log(e); // The prompt has been dismissed without selecting a device.
+        }
+    };
+
+    function updateInputData(data) {
+        let array = new Uint8Array(data); // event.data.buffer就是接收到的inputreport包数据了
+        let hexstr = "";
+        for (const data of array) {
+            hexstr += (Array(2).join(0) + data.toString(16).toUpperCase()).slice(-2) + " "; // 将字节数据转换成（XX ）形式字符串
+        }
+        iptInput.value += hexstr;
+        iptInput.scrollTop = iptInput.scrollHeight; // 滚动到底部
+    }
+
+    // 读取数据
+    async function listenReceived() {
+        if (reading) {
+            console.log("On reading.");
+            return;
+        }
+        reading = true;
+
+        while (port.readable && reading) {
+            reader = port.readable.getReader();
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        // |reader| has been canceled.
+                        break;
+                    }
+                    updateInputData(value);
+                }
+            } catch (e) {
+                console.log(e);
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+        await port.close();
+        port = null;
+        console.log("Port closed.");
+    }
+
+    // 打开串口
+    btnOpen.onclick = async () => {
+        if (port === null) {
+            console.log("Not selected.");
+            return;
+        }
+        await port.open({
+            baudRate: iptBaudRate.value,
+            // bufferSize: 255,   // 读写缓存，默认255
+            // dataBits: 8,       // 数据位，默认8
+            // flowControl: none, // 流控制，默认无
+            // parity: none,      // 校验，默认无
+            // stopBits: 1,       // 停止位，默认1
+        });
+        listenReceived();
+        console.log("Port opened.");
+    }
+
+    // 关闭串口
+    btnClose.onclick = async () => {
+        if ((port === null) || (!port.writable)) {
+            console.log("Not opened.");
+            return;
+        }
+
+        if (reading) {
+            reading = false;
+            reader?.cancel();
+        }
+    }
+
+    // 获取发送窗口十六进制字符串转换为字节数组
+    function getOutputData() {
+        let outputDatastr = iptOutput.value.replace(/\s+/g, ""); // 去除所有空白字符
+        if (outputDatastr.length % 2 == 0 && /^[0-9a-fA-F]+$/.test(outputDatastr)) {
+            // 获取字节数组长度
+            const byteLength = outputDatastr.length / 2;
+            // 创建字节数组
+            const outputData = new Uint8Array(byteLength);
+            // 将字符串转成字节数组数据
+            for (let i = 0; i < byteLength; i++) {
+                outputData[i] = parseInt(outputDatastr.substr(i * 2, 2), 16);
+            }
+            // 返回数据
+            return outputData;
+        } else {
+            throw "Data is not even or 0-9、a-f、A-F";
+        }
+    }
+
+    // 发送数据
+    btnSend.onclick = async () => {
+        if ((port === null) || (!port.writable)) {
+            console.log("Not opened.");
+            return;
+        }
+        const writer = port.writable.getWriter();
+        await writer.write(getOutputData()); // 发送数据
+        writer.releaseLock();
+    }
+
+</script>
+</html>
